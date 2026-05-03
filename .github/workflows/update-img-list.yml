@@ -19,45 +19,76 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # 生成 imglist.json
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Pillow
+        run: pip install Pillow
+      
       - name: Generate imglist.json
         run: |
-          GENERATED_AT=$(date -Iseconds)
-          TOTAL=$(find img -type f ! -path '*/\.*' | wc -l)
-          IMAGE_COUNT=$(find img -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.svg" -o -iname "*.bmp" \) | wc -l)
+          cat > generate_imglist.py << 'EOF'
+          import json
+          import os
+          from pathlib import Path
+          from datetime import datetime
+          from PIL import Image
           
-          cat > imglist.json << EOF
-          {
-            "total_count": $TOTAL,
-            "image_count": $IMAGE_COUNT,
-            "generated_at": "$GENERATED_AT",
-            "files": [
+          img_folder = Path("img")
+          output_file = "imglist.json"
+          
+          image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico'}
+          
+          files_info = []
+          image_count = 0
+          
+          for file_path in sorted(img_folder.rglob('*')):
+              if not file_path.is_file():
+                  continue
+              
+              file_name = file_path.name
+              ext = file_path.suffix.lower()
+              is_image = ext in image_extensions
+              
+              mtime = file_path.stat().st_mtime
+              updated_at = datetime.fromtimestamp(mtime).isoformat()
+              
+              width = None
+              height = None
+              
+              if is_image:
+                  try:
+                      with Image.open(file_path) as img:
+                          width, height = img.size
+                      image_count += 1
+                  except Exception as e:
+                      print(f"Warning: Cannot read {file_name} dimensions - {e}")
+              
+              files_info.append({
+                  "name": file_name,
+                  "updated_at": updated_at,
+                  "width": width,
+                  "height": height
+              })
+          
+          output = {
+              "total_count": len(files_info),
+              "image_count": image_count,
+              "generated_at": datetime.now().isoformat(),
+              "files": files_info
+          }
+          
+          with open(output_file, 'w', encoding='utf-8') as f:
+              json.dump(output, f, indent=2, ensure_ascii=False)
+          
+          print(f"Generated {output_file}, total {len(files_info)} files")
           EOF
           
-          first=true
-          while IFS= read -r file; do
-            filename=$(basename "$file")
-            modified_time=$(stat -c %y "$file" | cut -d'.' -f1)
-            modified_date=$(date -d "$modified_time" -Iseconds 2>/dev/null || echo "$modified_time")
-            
-            if [ "$first" = true ]; then
-              echo "    {" >> imglist.json
-              first=false
-            else
-              echo "    ,{" >> imglist.json
-            fi
-            
-            echo "      \"name\": \"$filename\"," >> imglist.json
-            echo "      \"updated_at\": \"$modified_date\"" >> imglist.json
-            echo "    }" >> imglist.json
-          done < <(find img -type f ! -path '*/\.*' | sort)
-          
-          echo "  ]" >> imglist.json
-          echo "}" >> imglist.json
-          
+          python3 generate_imglist.py
           cat imglist.json
       
-      # 提交 imglist.json 到仓库
       - name: Commit imglist.json
         run: |
           git config user.name "github-actions[bot]"
@@ -66,16 +97,15 @@ jobs:
           git diff --quiet && git diff --staged --quiet || git commit -m "Update imglist.json [skip ci]"
           git push
       
-  
       - name: Setup Pages
         uses: actions/configure-pages@v4
       
       - name: Prepare deployment folder
         run: |
-          
           mkdir -p deploy
           cp -r img deploy/
           cp imglist.json deploy/
+          
           cat > deploy/index.html << 'EOF'
           <!DOCTYPE html>
           <html>
@@ -90,14 +120,13 @@ jobs:
                   .image-card img { max-width: 100%; height: auto; border-radius: 4px; }
                   .image-card p { margin: 10px 0 0; font-size: 12px; word-break: break-all; }
                   .info { margin-top: 20px; padding: 10px; background: #f0f0f0; border-radius: 8px; }
-                  a { color: #0366d6; text-decoration: none; }
-                  a:hover { text-decoration: underline; }
+                  .dimension { color: #666; font-size: 11px; }
               </style>
           </head>
           <body>
-              <h1>图片列表</h1>
+              <h1>Image Gallery</h1>
               <div class="info">
-                  <p>正在加载图片列表...</p>
+                  <p>Loading image list...</p>
               </div>
               <div class="gallery" id="gallery"></div>
               
@@ -106,30 +135,37 @@ jobs:
                       .then(res => res.json())
                       .then(data => {
                           document.querySelector('.info').innerHTML = `
-                              <p>总计: ${data.total_count} 个文件 | 图片: ${data.image_count} 个</p>
-                              <p>生成时间: ${data.generated_at}</p>
+                              <p>Total: ${data.total_count} files | Images: ${data.image_count}</p>
+                              <p>Generated: ${data.generated_at}</p>
                           `;
                           
                           const gallery = document.getElementById('gallery');
                           data.files.forEach(file => {
                               const ext = file.name.split('.').pop().toLowerCase();
-                              const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
+                              const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(ext);
                               
                               const card = document.createElement('div');
                               card.className = 'image-card';
+                              
+                              let dimensionHtml = '';
+                              if (file.width && file.height) {
+                                  dimensionHtml = `<div class="dimension">${file.width} x ${file.height}</div>`;
+                              }
+                              
                               if (isImage) {
                                   card.innerHTML = `
                                       <img src="img/${file.name}" alt="${file.name}" onerror="this.style.display='none'">
                                       <p>${file.name}</p>
-                                      <p>${file.updated_at}</p>
+                                      ${dimensionHtml}
+                                      <p>${new Date(file.updated_at).toLocaleString()}</p>
                                   `;
                               } else {
                                   card.innerHTML = `
                                       <div style="height:150px; display:flex; align-items:center; justify-content:center; background:#f9f9f9;">
-                                          非图片文件
+                                          Non-image file
                                       </div>
-                                      <p> ${file.name}</p>
-                                      <p> ${file.updated_at}</p>
+                                      <p>${file.name}</p>
+                                      <p>${new Date(file.updated_at).toLocaleString()}</p>
                                   `;
                               }
                               gallery.appendChild(card);
