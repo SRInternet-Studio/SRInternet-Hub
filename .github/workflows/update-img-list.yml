@@ -1,0 +1,64 @@
+name: Update Hub img task
+
+on:
+  push:
+    paths:
+      - 'img/**'
+    branches:
+      - main
+
+jobs:
+  update:
+    name: Update Hub img task
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Generate imglist.json
+        run: |
+          GENERATED_AT=$(date -Iseconds)
+          TOTAL=$(find img -type f ! -path '*/\.*' | wc -l)
+          IMAGE_COUNT=$(find img -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.svg" -o -iname "*.bmp" \) | wc -l)
+          
+          cat > imglist.json << EOF
+          {
+            "total_count": $TOTAL,
+            "image_count": $IMAGE_COUNT,
+            "generated_at": "$GENERATED_AT",
+            "files": [
+          EOF
+          
+          # 添加每个文件的信息
+          first=true
+          while IFS= read -r file; do
+            filename=$(basename "$file")
+            modified_time=$(stat -c %y "$file" | cut -d'.' -f1)
+            modified_date=$(date -d "$modified_time" -Iseconds 2>/dev/null || echo "$modified_time")
+            
+            if [ "$first" = true ]; then
+              echo "    {" >> imglist.json
+              first=false
+            else
+              echo "    ,{" >> imglist.json
+            fi
+            
+            echo "      \"name\": \"$filename\"," >> imglist.json
+            echo "      \"updated_at\": \"$modified_date\"" >> imglist.json
+            echo "    }" >> imglist.json
+          done < <(find img -type f ! -path '*/\.*' | sort)
+          
+
+          echo "  ]" >> imglist.json
+          echo "}" >> imglist.json
+          
+      
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add imglist.json
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update imglist.json [skip ci]"
+          git push
