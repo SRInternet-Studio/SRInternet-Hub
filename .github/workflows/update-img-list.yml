@@ -8,15 +8,18 @@ on:
       - main
 
 jobs:
-  update:
+  update-and-deploy:
     name: Update Hub img task
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pages: write
+      id-token: write
     
     steps:
       - uses: actions/checkout@v4
       
+      # 生成 imglist.json
       - name: Generate imglist.json
         run: |
           GENERATED_AT=$(date -Iseconds)
@@ -31,7 +34,6 @@ jobs:
             "files": [
           EOF
           
-          # 添加每个文件的信息
           first=true
           while IFS= read -r file; do
             filename=$(basename "$file")
@@ -50,15 +52,98 @@ jobs:
             echo "    }" >> imglist.json
           done < <(find img -type f ! -path '*/\.*' | sort)
           
-
           echo "  ]" >> imglist.json
           echo "}" >> imglist.json
           
+          cat imglist.json
       
-      - name: Commit and push
+      # 提交 imglist.json 到仓库
+      - name: Commit imglist.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add imglist.json
           git diff --quiet && git diff --staged --quiet || git commit -m "Update imglist.json [skip ci]"
           git push
+      
+  
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+      
+      - name: Prepare deployment folder
+        run: |
+          
+          mkdir -p deploy
+          cp -r img deploy/
+          cp imglist.json deploy/
+          cat > deploy/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Image Gallery</title>
+              <meta charset="utf-8">
+              <style>
+                  body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
+                  h1 { color: #333; }
+                  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; margin-top: 20px; }
+                  .image-card { border: 1px solid #ddd; border-radius: 8px; padding: 10px; text-align: center; }
+                  .image-card img { max-width: 100%; height: auto; border-radius: 4px; }
+                  .image-card p { margin: 10px 0 0; font-size: 12px; word-break: break-all; }
+                  .info { margin-top: 20px; padding: 10px; background: #f0f0f0; border-radius: 8px; }
+                  a { color: #0366d6; text-decoration: none; }
+                  a:hover { text-decoration: underline; }
+              </style>
+          </head>
+          <body>
+              <h1>图片列表</h1>
+              <div class="info">
+                  <p>正在加载图片列表...</p>
+              </div>
+              <div class="gallery" id="gallery"></div>
+              
+              <script>
+                  fetch('imglist.json')
+                      .then(res => res.json())
+                      .then(data => {
+                          document.querySelector('.info').innerHTML = `
+                              <p>总计: ${data.total_count} 个文件 | 图片: ${data.image_count} 个</p>
+                              <p>生成时间: ${data.generated_at}</p>
+                          `;
+                          
+                          const gallery = document.getElementById('gallery');
+                          data.files.forEach(file => {
+                              const ext = file.name.split('.').pop().toLowerCase();
+                              const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext);
+                              
+                              const card = document.createElement('div');
+                              card.className = 'image-card';
+                              if (isImage) {
+                                  card.innerHTML = `
+                                      <img src="img/${file.name}" alt="${file.name}" onerror="this.style.display='none'">
+                                      <p>${file.name}</p>
+                                      <p>${file.updated_at}</p>
+                                  `;
+                              } else {
+                                  card.innerHTML = `
+                                      <div style="height:150px; display:flex; align-items:center; justify-content:center; background:#f9f9f9;">
+                                          非图片文件
+                                      </div>
+                                      <p> ${file.name}</p>
+                                      <p> ${file.updated_at}</p>
+                                  `;
+                              }
+                              gallery.appendChild(card);
+                          });
+                      });
+              </script>
+          </body>
+          </html>
+          EOF
+      
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: deploy
+      
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
