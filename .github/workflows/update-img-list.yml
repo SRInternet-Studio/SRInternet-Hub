@@ -3,7 +3,7 @@ name: Update Hub img task
 on:
   push:
     paths:
-      - 'img/**'
+      - 'images/**'
     branches:
       - main
 
@@ -36,7 +36,7 @@ jobs:
           from datetime import datetime
           from PIL import Image
           
-          img_folder = Path("img")
+          img_folder = Path("images")
           output_file = "imglist.json"
           
           image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico'}
